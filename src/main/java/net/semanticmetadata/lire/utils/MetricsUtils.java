@@ -63,6 +63,15 @@ public class MetricsUtils {
         return sum / h1.length;
     }
 
+    public static double distL1(short[] h1, short[] h2) {
+        assert (h1.length == h2.length);
+        double sum = 0d;
+        for (int i = 0; i < h1.length; i++) {
+            sum += Math.abs(h1[i] - h2[i]);
+        }
+        return sum / h1.length;
+    }
+
     public static double distL1(double[] h1, double[] h2) {
         assert (h1.length == h2.length);
         double sum = 0d;
@@ -328,8 +337,12 @@ public class MetricsUtils {
             tmp2 += hist2[i] * hist2[i];
         }
         if (tmp1 * tmp2 > 0) {
-            return Math.max(0, (1d - distance / (Math.sqrt(tmp1) * Math.sqrt(tmp2))));
+            return distance / (Math.sqrt(tmp1) * Math.sqrt(tmp2));
         } else return 1d;
+    }
+
+    public static double cosineDistance(double[] hist1, double[] hist2) {
+        return 1d-cosineCoefficient(hist1, hist2);
     }
 
     public static double distL1(float[] h1, float[] h2) {

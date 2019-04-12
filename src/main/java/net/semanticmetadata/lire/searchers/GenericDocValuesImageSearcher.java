@@ -51,6 +51,7 @@ import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.util.Bits;
+import org.apache.lucene.util.BytesRef;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
@@ -113,35 +114,43 @@ public class GenericDocValuesImageSearcher extends AbstractImageSearcher {
      * @throws IOException
      */
     protected double findSimilar(LireFeature lireFeature) throws IOException {
+        // reset the iterator ... needed since Lucene 7.0
+        docValues = MultiDocValues.getBinaryValues(reader, cachedInstance.getFieldName());
         maxDistance = -1d;
 
         // clear result set ...
         docs.clear();
         // Needed for check whether the document is deleted.
-        Bits liveDocs = MultiFields.getLiveDocs(reader);
+        Bits liveDocs = MultiBits.getLiveDocs(reader);
         Document d;
         double tmpDistance;
+        boolean docValueIsThere = true;
+        BytesRef bytesRef = null;
         int docs = reader.numDocs();
         // we read each and every document from the index and then we compare it to the query.
         for (int i = 0; i < docs; i++) {
             if (reader.hasDeletions() && !liveDocs.get(i)) continue; // if it is deleted, just ignore it.
+            // advance to the current document
+            docValueIsThere = docValues.advanceExact(i);
+            if (docValueIsThere) {
+                bytesRef = docValues.binaryValue();
+                cachedInstance.setByteArrayRepresentation(bytesRef.bytes, bytesRef.offset, bytesRef.length);
 
-            cachedInstance.setByteArrayRepresentation(docValues.get(i).bytes, docValues.get(i).offset, docValues.get(i).length);
-
-            tmpDistance = cachedInstance.getDistance(lireFeature);
-            assert (tmpDistance >= 0);
-            // if the array is not full yet:
-            if (this.docs.size() < maxHits) {
-                this.docs.add(new SimpleResult(tmpDistance, i));
-                if (tmpDistance > maxDistance) maxDistance = tmpDistance;
-            } else if (tmpDistance < maxDistance) {
-                // if it is nearer to the sample than at least on of the current set:
-                // remove the last one ...
-                this.docs.remove(this.docs.last());
-                // add the new one ...
-                this.docs.add(new SimpleResult(tmpDistance, i));
-                // and set our new distance border ...
-                maxDistance = this.docs.last().getDistance();
+                tmpDistance = cachedInstance.getDistance(lireFeature);
+                assert (tmpDistance >= 0);
+                // if the array is not full yet:
+                if (this.docs.size() < maxHits) {
+                    this.docs.add(new SimpleResult(tmpDistance, i));
+                    if (tmpDistance > maxDistance) maxDistance = tmpDistance;
+                } else if (tmpDistance < maxDistance) {
+                    // if it is nearer to the sample than at least on of the current set:
+                    // remove the last one ...
+                    this.docs.remove(this.docs.last());
+                    // add the new one ...
+                    this.docs.add(new SimpleResult(tmpDistance, i));
+                    // and set our new distance border ...
+                    maxDistance = this.docs.last().getDistance();
+                }
             }
         }
         return maxDistance;
@@ -154,7 +163,14 @@ public class GenericDocValuesImageSearcher extends AbstractImageSearcher {
         SimpleImageSearchHits searchHits = null;
         LireFeature lireFeature = extractorItem.getFeatureInstance();
 //        BinaryDocValues binaryValues = MultiDocValues.getBinaryValues(reader, lireFeature.getFieldName());
-        lireFeature.setByteArrayRepresentation(docValues.get(doc).bytes, docValues.get(doc).offset, docValues.get(doc).length);
+        docValues = MultiDocValues.getBinaryValues(reader, cachedInstance.getFieldName());
+        if (!docValues.advanceExact(doc)) {
+            // Lucene expects the doc id's to be accessed in the right order, if this is not done, we've got a problem here.
+            // LireSolr has an elegant solution on this by resetting the state on-the-fly, but worst case the DocValues are too often.
+            // see RandomAccessBinaryDocValues in LireSolr.
+            System.err.println("Could not advance to document, meaning document id is not in the index or the documents are not accessed in the right order.");
+        }
+        lireFeature.setByteArrayRepresentation(docValues.binaryValue().bytes, docValues.binaryValue().offset, docValues.binaryValue().length);
         double maxDistance = findSimilar(lireFeature);
 
         if (!useSimilarityScore) {
@@ -170,7 +186,7 @@ public class GenericDocValuesImageSearcher extends AbstractImageSearcher {
         IndexSearcher is = new IndexSearcher(reader);
         TermQuery tq = new TermQuery(new Term(DocumentBuilder.FIELD_NAME_IDENTIFIER, doc.getValues(DocumentBuilder.FIELD_NAME_IDENTIFIER)[0]));
         TopDocs topDocs = is.search(tq, 1);
-        if (topDocs.totalHits > 0) {
+        if (topDocs.totalHits.value > 0) {
             return search(topDocs.scoreDocs[0].doc);
         } else return null;
     }
